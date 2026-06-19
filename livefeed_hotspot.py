@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import time
+import threading
 from fractions import Fraction
 from typing import Optional
 
@@ -22,24 +23,18 @@ import uvicorn
 
 APP_TITLE = "Live Audio Transmission"
 
-# Step 1: create hotspot, then users manually open http://10.42.0.1:8000
 HOTSPOT_ENABLED = True
 HOTSPOT_NAME = "Live Feed"
 
-# "open" = no password
-# "password" = WPA/WPA2 password; must be 8+ characters
+# "open" or "password"
 HOTSPOT_MODE = "password"
 HOTSPOT_PASSWORD = "12345678"
 
-# Change this if your WiFi interface is different.
-# Your laptop earlier used wlp0s20f3.
 WIFI_INTERFACE = "wlp0s20f3"
 
 SERVER_HOST = "0.0.0.0"
 SERVER_PORT = 8000
 
-# Audio settings.
-# If 48000 fails, use AUDIO_RATE = 44100 and AUDIO_FRAME_SAMPLES = 882.
 AUDIO_RATE = 48000
 AUDIO_FRAME_SAMPLES = 960  # 20 ms at 48 kHz
 
@@ -49,8 +44,6 @@ FORMAT = pyaudio.paInt16
 VOLUME_MULTIPLIER = 1.0
 NOISE_GATE = 0
 
-# None = default microphone.
-# Visit /mics to list devices.
 SELECTED_INPUT_INDEX: Optional[int] = None
 
 # =========================================================
@@ -89,9 +82,6 @@ def run_cmd(cmd, check=True):
 
 
 def sudo_cmd(args):
-    """
-    Run nmcli through sudo while keeping the Python audio app as normal user.
-    """
     if os.geteuid() == 0:
         return args
     return ["sudo"] + args
@@ -208,26 +198,49 @@ def get_hotspot_ip():
 
 
 # =========================================================
-# AUDIO TRACK
+# SHARED MICROPHONE SOURCE
 # =========================================================
 
-class MicrophoneAudioTrack(MediaStreamTrack):
-    kind = "audio"
+class SharedMicrophoneSource:
+    """
+    Opens the microphone ONCE and broadcasts frames to all connected listeners.
+    """
 
     def __init__(self):
-        super().__init__()
+        self._pyaudio = None
+        self._stream = None
+        self._thread = None
+        self._stop_event = threading.Event()
+        self._lock = threading.Lock()
+        self._subscribers = set()
+        self._running = False
 
-        self.sample_rate = AUDIO_RATE
-        self.frame_samples = AUDIO_FRAME_SAMPLES
-        self._timestamp = 0
-        self._pyaudio = pyaudio.PyAudio()
+    def register(self, loop: asyncio.AbstractEventLoop, queue: asyncio.Queue):
+        with self._lock:
+            self._subscribers.add((loop, queue))
+            logger.info("Audio subscriber added. Total subscribers: %s", len(self._subscribers))
 
+            if not self._running:
+                self._start_locked()
+
+    def unregister(self, loop: asyncio.AbstractEventLoop, queue: asyncio.Queue):
+        with self._lock:
+            self._subscribers.discard((loop, queue))
+            logger.info("Audio subscriber removed. Total subscribers: %s", len(self._subscribers))
+
+            if not self._subscribers:
+                self._stop_locked()
+
+    def _start_locked(self):
         logger.info(
-            "Opening microphone: device=%s rate=%s frame_samples=%s",
+            "Opening shared microphone: device=%s rate=%s frame_samples=%s",
             SELECTED_INPUT_INDEX,
             AUDIO_RATE,
             AUDIO_FRAME_SAMPLES,
         )
+
+        self._stop_event.clear()
+        self._pyaudio = pyaudio.PyAudio()
 
         self._stream = self._pyaudio.open(
             format=FORMAT,
@@ -238,28 +251,105 @@ class MicrophoneAudioTrack(MediaStreamTrack):
             frames_per_buffer=AUDIO_FRAME_SAMPLES,
         )
 
-    async def recv(self):
-        loop = asyncio.get_running_loop()
+        self._thread = threading.Thread(target=self._capture_loop, daemon=True)
+        self._running = True
+        self._thread.start()
 
-        data = await loop.run_in_executor(
-            None,
-            self._stream.read,
-            self.frame_samples,
-            False,
-        )
+    def _stop_locked(self):
+        logger.info("Stopping shared microphone")
+
+        self._stop_event.set()
+        self._running = False
+
+        try:
+            if self._stream:
+                self._stream.stop_stream()
+                self._stream.close()
+        except Exception:
+            pass
+
+        try:
+            if self._pyaudio:
+                self._pyaudio.terminate()
+        except Exception:
+            pass
+
+        self._stream = None
+        self._pyaudio = None
+        self._thread = None
+
+    def _capture_loop(self):
+        while not self._stop_event.is_set():
+            try:
+                data = self._stream.read(AUDIO_FRAME_SAMPLES, exception_on_overflow=False)
+
+                audio_data = np.frombuffer(data, dtype=np.int16).copy()
+
+                if NOISE_GATE > 0:
+                    audio_data[np.abs(audio_data) < NOISE_GATE] = 0
+
+                if VOLUME_MULTIPLIER != 1.0:
+                    audio_data = np.clip(
+                        audio_data.astype(np.float32) * VOLUME_MULTIPLIER,
+                        -32768,
+                        32767,
+                    ).astype(np.int16)
+
+                final_data = audio_data.tobytes()
+
+                with self._lock:
+                    subscribers = list(self._subscribers)
+
+                for loop, queue in subscribers:
+                    loop.call_soon_threadsafe(self._push_frame, queue, final_data)
+
+            except Exception as e:
+                logger.exception("Microphone capture error: %s", e)
+                time.sleep(0.05)
+
+    @staticmethod
+    def _push_frame(queue: asyncio.Queue, data: bytes):
+        try:
+            if queue.full():
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+
+            queue.put_nowait(data)
+
+        except Exception:
+            pass
+
+    def stop_all(self):
+        with self._lock:
+            self._subscribers.clear()
+            if self._running:
+                self._stop_locked()
+
+
+shared_microphone = SharedMicrophoneSource()
+
+
+class MicrophoneAudioTrack(MediaStreamTrack):
+    kind = "audio"
+
+    def __init__(self):
+        super().__init__()
+
+        self.sample_rate = AUDIO_RATE
+        self.frame_samples = AUDIO_FRAME_SAMPLES
+        self._timestamp = 0
+        self._queue = asyncio.Queue(maxsize=3)
+        self._loop = asyncio.get_running_loop()
+        self._stopped = False
+
+        shared_microphone.register(self._loop, self._queue)
+
+    async def recv(self):
+        data = await self._queue.get()
 
         audio_data = np.frombuffer(data, dtype=np.int16).copy()
-
-        if NOISE_GATE > 0:
-            audio_data[np.abs(audio_data) < NOISE_GATE] = 0
-
-        if VOLUME_MULTIPLIER != 1.0:
-            audio_data = np.clip(
-                audio_data.astype(np.float32) * VOLUME_MULTIPLIER,
-                -32768,
-                32767,
-            ).astype(np.int16)
-
         audio_data = audio_data.reshape(1, -1)
 
         frame = av.AudioFrame.from_ndarray(audio_data, format="s16", layout="mono")
@@ -271,16 +361,11 @@ class MicrophoneAudioTrack(MediaStreamTrack):
         return frame
 
     def stop(self):
-        logger.info("Stopping microphone")
-        try:
-            self._stream.stop_stream()
-            self._stream.close()
-        except Exception:
-            pass
-        try:
-            self._pyaudio.terminate()
-        except Exception:
-            pass
+        if not self._stopped:
+            self._stopped = True
+            logger.info("Stopping client audio track")
+            shared_microphone.unregister(self._loop, self._queue)
+
         super().stop()
 
 
@@ -420,6 +505,11 @@ INDEX_HTML = """
         };
 
         async function startWebRTC() {
+            if (pc) {
+                pc.close();
+                pc = null;
+            }
+
             log("Creating RTCPeerConnection");
 
             pc = new RTCPeerConnection({ iceServers: [] });
@@ -552,6 +642,16 @@ async def mics():
     return JSONResponse(devices)
 
 
+@app.get("/stats")
+async def stats():
+    return JSONResponse({
+        "connected_clients": len(pcs),
+        "audio_rate": AUDIO_RATE,
+        "frame_samples": AUDIO_FRAME_SAMPLES,
+        "shared_microphone": True,
+    })
+
+
 @app.post("/offer")
 async def offer(request: Request):
     logger.info("POST /offer received")
@@ -568,17 +668,18 @@ async def offer(request: Request):
 
     logger.info("Created peer connection. Total clients: %s", len(pcs))
 
+    audio_track = MicrophoneAudioTrack()
+    pc.addTrack(audio_track)
+
     @pc.on("connectionstatechange")
     async def on_connectionstatechange():
         logger.info("Connection state is %s", pc.connectionState)
 
         if pc.connectionState in ("failed", "closed", "disconnected"):
+            audio_track.stop()
             await pc.close()
             pcs.discard(pc)
             logger.info("Peer removed. Total clients: %s", len(pcs))
-
-    audio_track = MicrophoneAudioTrack()
-    pc.addTrack(audio_track)
 
     await pc.setRemoteDescription(offer_desc)
 
@@ -596,7 +697,9 @@ async def on_shutdown():
     coros = [pc.close() for pc in pcs]
     if coros:
         await asyncio.gather(*coros)
+
     pcs.clear()
+    shared_microphone.stop_all()
 
 
 # =========================================================
@@ -629,9 +732,11 @@ def main():
     print(f"Listen URL:      http://{hotspot_ip}:{args.port}")
     print(f"Button test:     http://{hotspot_ip}:{args.port}/button-test")
     print(f"Mic list:        http://{hotspot_ip}:{args.port}/mics")
+    print(f"Stats:           http://{hotspot_ip}:{args.port}/stats")
     print()
     print(f"Audio rate:      {AUDIO_RATE}")
     print(f"Frame samples:   {AUDIO_FRAME_SAMPLES}")
+    print(f"Shared mic:      enabled")
     print("=" * 60)
     print()
 
