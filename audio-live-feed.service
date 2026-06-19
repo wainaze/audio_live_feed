@@ -1,0 +1,15 @@
+[Unit]
+Description=Live Audio Feed
+After=network-manager.service sound.target
+Wants=network-manager.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/audio_live_feed
+ExecStart=/home/pi/audio_live_feed/start.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

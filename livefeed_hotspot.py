@@ -17,34 +17,59 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 import uvicorn
 
+def detect_wifi_interface():
+    try:
+        output = subprocess.check_output(
+            ["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "device"],
+            text=True
+        )
+
+        for line in output.splitlines():
+            parts = line.split(":")
+            if len(parts) >= 3:
+                device, dev_type, state = parts[0], parts[1], parts[2]
+                if dev_type == "wifi" and device:
+                    print(f"[*] Auto-detected WiFi interface: {device}")
+                    return device
+
+    except Exception as e:
+        print(f"[!] Could not auto-detect WiFi interface: {e}")
+
+    raise RuntimeError(
+        "No WiFi interface found. Set WIFI_INTERFACE manually in config.env."
+    )
+
 # =========================================================
 # CONFIGURATION
 # =========================================================
 
-APP_TITLE = "Live Audio Transmission"
+APP_TITLE = os.getenv("APP_TITLE", "Live Audio Transmission")
 
-HOTSPOT_ENABLED = True
-HOTSPOT_NAME = "Live Feed"
+HOTSPOT_ENABLED = os.getenv("HOTSPOT_ENABLED", "true").lower() == "true"
+HOTSPOT_NAME = os.getenv("HOTSPOT_NAME", "Live Feed")
 
-# "open" or "password"
-HOTSPOT_MODE = "password"
-HOTSPOT_PASSWORD = "12345678"
+HOTSPOT_MODE = os.getenv("HOTSPOT_MODE", "password")
+HOTSPOT_PASSWORD = os.getenv("HOTSPOT_PASSWORD", "12345678")
 
-WIFI_INTERFACE = "wlp0s20f3"
+WIFI_INTERFACE = os.getenv("WIFI_INTERFACE", "auto").strip()
 
-SERVER_HOST = "0.0.0.0"
-SERVER_PORT = 8000
+if WIFI_INTERFACE.lower() == "auto":
+    WIFI_INTERFACE = detect_wifi_interface()
 
-AUDIO_RATE = 48000
-AUDIO_FRAME_SAMPLES = 960  # 20 ms at 48 kHz
+SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
+SERVER_PORT = int(os.getenv("SERVER_PORT", "8000"))
 
-CHANNELS = 1
+AUDIO_RATE = int(os.getenv("AUDIO_RATE", "48000"))
+AUDIO_FRAME_SAMPLES = int(os.getenv("AUDIO_FRAME_SAMPLES", "960"))
+
+CHANNELS = int(os.getenv("CHANNELS", "1"))
 FORMAT = pyaudio.paInt16
 
-VOLUME_MULTIPLIER = 1.0
-NOISE_GATE = 0
+VOLUME_MULTIPLIER = float(os.getenv("VOLUME_MULTIPLIER", "1.0"))
+NOISE_GATE = int(os.getenv("NOISE_GATE", "0"))
 
-SELECTED_INPUT_INDEX: Optional[int] = None
+_selected_input = os.getenv("SELECTED_INPUT_INDEX", "").strip()
+SELECTED_INPUT_INDEX: Optional[int] = int(_selected_input) if _selected_input else None
 
 # =========================================================
 # LOGGING / GLOBALS
