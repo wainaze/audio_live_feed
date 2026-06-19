@@ -257,15 +257,35 @@ class SharedMicrophoneSource:
                 self._stop_locked()
 
     def _start_locked(self):
+        self._stop_event.clear()
+        self._pyaudio = pyaudio.PyAudio()
+
+        try:
+            if SELECTED_INPUT_INDEX is None:
+                mic = self._pyaudio.get_default_input_device_info()
+            else:
+                mic = self._pyaudio.get_device_info_by_index(SELECTED_INPUT_INDEX)
+
+            print()
+            print("=" * 60)
+            print(" Audio Device Selected")
+            print("=" * 60)
+            print(f"Index:        {mic['index']}")
+            print(f"Name:         {mic['name']}")
+            print(f"Channels:     {mic['maxInputChannels']}")
+            print(f"Sample Rate:  {mic['defaultSampleRate']}")
+            print("=" * 60)
+            print()
+
+        except Exception as e:
+            logger.warning("Could not display microphone info: %s", e)
+
         logger.info(
             "Opening shared microphone: device=%s rate=%s frame_samples=%s",
             SELECTED_INPUT_INDEX,
             AUDIO_RATE,
             AUDIO_FRAME_SAMPLES,
         )
-
-        self._stop_event.clear()
-        self._pyaudio = pyaudio.PyAudio()
 
         self._stream = self._pyaudio.open(
             format=FORMAT,
@@ -286,22 +306,32 @@ class SharedMicrophoneSource:
         self._stop_event.set()
         self._running = False
 
-        try:
-            if self._stream:
-                self._stream.stop_stream()
-                self._stream.close()
-        except Exception:
-            pass
+        thread = self._thread
+        stream = self._stream
+        pyaudio_instance = self._pyaudio
 
-        try:
-            if self._pyaudio:
-                self._pyaudio.terminate()
-        except Exception:
-            pass
-
+        self._thread = None
         self._stream = None
         self._pyaudio = None
-        self._thread = None
+
+        try:
+            if thread and thread.is_alive():
+                thread.join(timeout=1.0)
+        except Exception as e:
+            logger.warning("Error while waiting for microphone thread to stop: %s", e)
+
+        try:
+            if stream:
+                stream.stop_stream()
+                stream.close()
+        except Exception as e:
+            logger.warning("Error while closing microphone stream: %s", e)
+
+        try:
+            if pyaudio_instance:
+                pyaudio_instance.terminate()
+        except Exception as e:
+            logger.warning("Error while terminating PyAudio: %s", e)
 
     def _capture_loop(self):
         while not self._stop_event.is_set():
