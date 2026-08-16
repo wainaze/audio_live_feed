@@ -282,16 +282,42 @@ def scan_wifi_networks():
 
 def connect_to_wifi(ssid: str, password: str = ""):
     ifname = WIFI_INTERFACE
+
+    # 1. Try immediate live connection if network is broadcasting
     cmd = ["nmcli", "dev", "wifi", "connect", ssid]
     if password:
         cmd.extend(["password", password])
     if ifname:
         cmd.extend(["ifname", ifname])
 
-    res = subprocess.run(sudo_cmd(cmd), capture_output=True, text=True, timeout=25)
-    if res.returncode != 0:
-        return {"success": False, "error": res.stderr.strip() or res.stdout.strip()}
-    return {"success": True, "message": f"Successfully connected to {ssid}"}
+    res = subprocess.run(sudo_cmd(cmd), capture_output=True, text=True, timeout=12)
+    if res.returncode == 0:
+        return {"success": True, "message": f"Connected to {ssid}"}
+
+    # 2. If network is currently off (e.g. phone hotspot), save profile offline with autoconnect
+    subprocess.run(sudo_cmd(["nmcli", "connection", "delete", ssid]), capture_output=True, text=True)
+
+    add_cmd = [
+        "nmcli", "connection", "add",
+        "type", "wifi",
+        "con-name", ssid,
+        "ifname", ifname,
+        "ssid", ssid,
+        "autoconnect", "yes",
+    ]
+    if password:
+        add_cmd.extend(["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", password])
+    else:
+        add_cmd.extend(["wifi-sec.key-mgmt", "none"])
+
+    add_res = subprocess.run(sudo_cmd(add_cmd), capture_output=True, text=True, timeout=10)
+    if add_res.returncode == 0:
+        return {
+            "success": True,
+            "message": f"Saved Wi-Fi profile for '{ssid}'. When you turn on your Personal Hotspot, the server will connect automatically!",
+        }
+
+    return {"success": False, "error": res.stderr.strip() or res.stdout.strip()}
 
 
 def validate_hotspot_config():
@@ -1297,6 +1323,29 @@ ADMIN_HTML = """
 
             <!-- TAB 1: WI-FI -->
             <div id="wifiTab" class="tab-content active">
+                <div class="section" style="background: linear-gradient(135deg, #1e293b, #0f172a); border-color: #0284c7;">
+                    <div class="section-title" style="color: #38bdf8; margin-bottom: 12px;">
+                        <span>📍 Broadcast Access URLs</span>
+                    </div>
+                    
+                    <div style="background: #0f172a; padding: 12px 14px; border-radius: 10px; margin-bottom: 10px; border: 1px solid #334155;">
+                        <div style="font-size: 12px; color: #94a3b8; margin-bottom: 4px; font-weight: 600;">🎧 LISTENER URL (Share with audience):</div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+                            <strong id="listenerUrlDisplay" style="color: #22c55e; font-size: 16px; word-break: break-all;">http://--:8000</strong>
+                            <button class="btn btn-secondary" style="padding: 4px 10px; font-size: 12px;" onclick="copyUrl('listenerUrlDisplay')">📋 Copy</button>
+                        </div>
+                        <div style="font-size: 12px; color: #64748b; margin-top: 5px;">On Raspberry Pi: <span style="color:#94a3b8">http://livefeed.local:8000</span></div>
+                    </div>
+
+                    <div style="background: #0f172a; padding: 10px 14px; border-radius: 10px; border: 1px solid #334155;">
+                        <div style="font-size: 12px; color: #94a3b8; margin-bottom: 4px; font-weight: 600;">⚙️ ADMIN CONSOLE URL:</div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+                            <strong id="adminUrlDisplay" style="color: #38bdf8; font-size: 14px; word-break: break-all;">http://--:8000/admin</strong>
+                            <button class="btn btn-secondary" style="padding: 4px 10px; font-size: 12px;" onclick="copyUrl('adminUrlDisplay')">📋 Copy</button>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="section">
                     <div class="section-title">Current Connection</div>
                     <div class="row"><span>Status:</span> <strong id="wfState">Loading...</strong></div>
@@ -1452,10 +1501,29 @@ ADMIN_HTML = """
             loadStats();
         }
 
+        function copyUrl(elementId) {
+            const text = document.getElementById(elementId).textContent.trim();
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(() => {
+                    alert("Copied to clipboard:\\n" + text);
+                }).catch(() => {
+                    prompt("Copy URL:", text);
+                });
+            } else {
+                prompt("Copy URL:", text);
+            }
+        }
+
         async function loadWifiStatus() {
             try {
                 const res = await fetch("/api/wifi/status");
                 const d = await res.json();
+                const ip = d.ip_address || window.location.hostname;
+                const port = window.location.port ? window.location.port : "8000";
+                
+                document.getElementById("listenerUrlDisplay").textContent = "http://" + ip + ":" + port;
+                document.getElementById("adminUrlDisplay").textContent = "http://" + ip + ":" + port + "/admin";
+                
                 document.getElementById("wfState").textContent = d.state;
                 document.getElementById("wfSsid").textContent = d.connected_ssid || "None (Hotspot / Ethernet)";
                 document.getElementById("wfIp").textContent = d.ip_address;
@@ -1845,8 +1913,7 @@ async def on_shutdown():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default=SERVER_HOST)
-    parser.add_argument("--port", default=SERVER_PORT, type=int)
-    parser.add_argument("--no-hotspot", action="store_true")
+    parser.add_argument("-n", "--no-hotspot", "--no_hotspot", "-no-hotspot", dest="no_hotspot", action="store_true", help="Run without setting up a WiFi hotspot")
     args = parser.parse_args()
 
     if args.no_hotspot:
