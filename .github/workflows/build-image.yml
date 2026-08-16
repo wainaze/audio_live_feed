@@ -18,18 +18,32 @@ jobs:
         with:
           base_image: raspios_lite_arm64:latest
           image_additional_mb: 1024
-          bind_mount_repository: true
           copy_repository_path: /home/pi/audio_live_feed
           commands: |
+            # 1. Install system packages
             apt-get update
             apt-get install -y python3 python3-venv python3-pip portaudio19-dev python3-dev network-manager avahi-daemon git
-            hostnamectl set-hostname livefeed
+
+            # 2. Set hostname offline (without dbus)
+            echo "livefeed" > /etc/hostname
+            sed -i 's/127\.0\.1\.1.*/127.0.1.1\tlivefeed/g' /etc/hosts || true
+
+            # 3. Ensure pi user exists
+            id -u pi &>/dev/null || useradd -m -s /bin/bash pi
+
+            # 4. Setup Python venv and install dependencies
             cd /home/pi/audio_live_feed
             python3 -m venv venv
             ./venv/bin/pip install --upgrade pip
             ./venv/bin/pip install -r requirements.txt
+
+            # 5. Install and enable systemd service offline
             cp audio-live-feed.service /etc/systemd/system/audio-live-feed.service
-            systemctl enable audio-live-feed
+            mkdir -p /etc/systemd/system/multi-user.target.wants
+            ln -sf /etc/systemd/system/audio-live-feed.service /etc/systemd/system/multi-user.target.wants/audio-live-feed.service
+
+            # 6. Set correct permissions
+            chown -R pi:pi /home/pi/audio_live_feed
 
       - name: Compress image with XZ
         run: |
