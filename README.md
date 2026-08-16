@@ -266,35 +266,31 @@ sudo systemctl restart audio-live-feed
 
 ## Useful App Pages
 
-Main listener page:
+### Main Listener Page (Senior-Friendly UI)
 
 ```txt
 http://10.42.0.1:8000
 ```
-
-or on Raspberry Pi:
-
+or on your local network:
 ```txt
 http://livefeed.local:8000
 ```
+- High-contrast, single-tap **TAP TO LISTEN** interface
+- Live soundwave animation & visual feedback
+- Large thumb-friendly volume slider
+- Automatic screen wake lock to prevent phone sleep
 
-Microphone list:
-
-```txt
-http://10.42.0.1:8000/mics
-```
-
-Stats:
+### Admin Console (`/admin`)
 
 ```txt
-http://10.42.0.1:8000/stats
+http://livefeed.local:8000/admin
 ```
+- **Wi-Fi Manager:** Scan nearby venue Wi-Fi networks and connect with 1 tap
+- **Hotspot Settings:** Toggle access point mode and change credentials
+- **Audio Tuning:** Real-time VU meter (decibels & peak level), microphone selector, volume multiplier, and noise gate
+- **System Controls:** View connected listeners, restart audio service, and reboot the device
+- **Password Protected:** Configurable via `ADMIN_PASSWORD` in `config.env` (default: `admin`)
 
-Button test:
-
-```txt
-http://10.42.0.1:8000/button-test
-```
 
 ---
 
