@@ -1308,7 +1308,10 @@ ADMIN_HTML = """
                 <div class="section">
                     <div class="section-title">
                         <span>Nearby Wi-Fi Networks</span>
-                        <button class="btn btn-secondary" style="padding:6px 12px" onclick="scanWifi()">🔍 Scan</button>
+                        <div style="display:flex; gap:6px;">
+                            <button class="btn btn-secondary" style="padding:6px 12px; font-size:13px;" onclick="openManualWifiModal()">➕ Add Manual</button>
+                            <button class="btn btn-primary" style="padding:6px 12px; font-size:13px;" onclick="scanWifi()">🔍 Scan</button>
+                        </div>
                     </div>
                     <div class="wifi-list" id="wifiList">
                         <div style="color:#94a3b8; text-align:center; padding:15px;">Tap Scan to detect nearby Wi-Fi networks</div>
@@ -1377,11 +1380,24 @@ ADMIN_HTML = """
     </div>
 
     <!-- Wi-Fi Connect Modal -->
-    <div id="wifiModal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.7); display:none; justify-content:center; align-items:center; z-index:100;">
+    <div id="wifiModal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.7); justify-content:center; align-items:center; z-index:100;">
         <div style="background:#1e293b; border:1px solid #475569; border-radius:16px; padding:24px; width:90%; max-width:380px;">
-            <h3 style="margin-bottom:12px">Connect to Wi-Fi</h3>
-            <div style="font-size:15px; font-weight:600; margin-bottom:16px;" id="modalSsid"></div>
-            <input type="password" id="modalPassword" placeholder="Wi-Fi Password" style="margin-bottom:16px">
+            <h3 style="margin-bottom:14px" id="modalTitle">Connect to Wi-Fi</h3>
+            
+            <div class="form-group">
+                <label>Wi-Fi Network Name (SSID):</label>
+                <input type="text" id="modalSsidInput" placeholder="e.g. Waina's iPhone or Venue-5G" style="margin-bottom:12px">
+            </div>
+
+            <div class="form-group">
+                <label>Password (leave blank if open):</label>
+                <input type="password" id="modalPassword" placeholder="Wi-Fi Password" style="margin-bottom:14px">
+            </div>
+
+            <div style="font-size:12px; color:#94a3b8; margin-bottom:16px; line-height:1.4; background:#0f172a; padding:8px 10px; border-radius:8px;">
+                💡 <strong>Tip for Phone Hotspots:</strong> Enter your hotspot name and password here, click <em>Connect</em>, then turn your phone's Personal Hotspot <strong>ON</strong>.
+            </div>
+
             <div style="display:flex; gap:10px;">
                 <button class="btn btn-secondary" style="flex:1" onclick="closeWifiModal()">Cancel</button>
                 <button class="btn btn-primary" style="flex:1" onclick="submitWifiConnect()">Connect</button>
@@ -1390,8 +1406,6 @@ ADMIN_HTML = """
     </div>
 
     <script>
-        let selectedSsid = "";
-
         function showTab(tabId, el) {
             document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
             document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -1481,10 +1495,19 @@ ADMIN_HTML = """
         }
 
         function openWifiModal(ssid) {
-            selectedSsid = ssid;
-            document.getElementById("modalSsid").textContent = ssid;
+            document.getElementById("modalTitle").textContent = "Connect to Wi-Fi";
+            document.getElementById("modalSsidInput").value = ssid;
             document.getElementById("modalPassword").value = "";
             document.getElementById("wifiModal").style.display = "flex";
+            document.getElementById("modalPassword").focus();
+        }
+
+        function openManualWifiModal() {
+            document.getElementById("modalTitle").textContent = "Add Custom / Hotspot Wi-Fi";
+            document.getElementById("modalSsidInput").value = "";
+            document.getElementById("modalPassword").value = "";
+            document.getElementById("wifiModal").style.display = "flex";
+            document.getElementById("modalSsidInput").focus();
         }
 
         function closeWifiModal() {
@@ -1492,16 +1515,21 @@ ADMIN_HTML = """
         }
 
         async function submitWifiConnect() {
+            const ssid = document.getElementById("modalSsidInput").value.trim();
             const pass = document.getElementById("modalPassword").value;
+            if (!ssid) {
+                alert("Please enter a Wi-Fi Network Name (SSID).");
+                return;
+            }
             closeWifiModal();
-            alert("Attempting to connect to " + selectedSsid + ". Please wait a moment...");
+            alert("Attempting to connect to " + ssid + ". If this is a phone hotspot, please make sure your hotspot is ON.");
             const res = await fetch("/api/wifi/connect", {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
-                body: JSON.stringify({ssid: selectedSsid, password: pass})
+                body: JSON.stringify({ssid: ssid, password: pass})
             });
             const data = await res.json();
-            alert(data.success ? data.message : "Failed: " + data.error);
+            alert(data.success ? data.message : "Connection attempt returned: " + (data.error || "failed"));
             loadWifiStatus();
         }
 
