@@ -1913,6 +1913,7 @@ async def on_shutdown():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default=SERVER_HOST)
+    parser.add_argument("--port", default=SERVER_PORT, type=int)
     parser.add_argument("-n", "--no-hotspot", "--no_hotspot", "-no-hotspot", dest="no_hotspot", action="store_true", help="Run without setting up a WiFi hotspot")
     args = parser.parse_args()
 
