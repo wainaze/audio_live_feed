@@ -57,18 +57,21 @@ jobs:
             mkdir -p /etc/NetworkManager/system-connections
             printf "[connection]\nid=Live Feed Hotspot\nuuid=a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d\ntype=wifi\nautoconnect=true\nautoconnect-priority=100\n\n[wifi]\nmode=ap\nssid=Live Feed\nband=bg\nchannel=6\n\n[wifi-security]\nkey-mgmt=wpa-psk\nproto=rsn\npairwise=ccmp\ngroup=ccmp\npsk=12345678\n\n[ipv4]\nmethod=shared\naddress1=10.42.0.1/24\n\n[ipv6]\nmethod=ignore\n" > "/etc/NetworkManager/system-connections/LiveFeedHotspot.nmconnection"
             chmod 600 "/etc/NetworkManager/system-connections/LiveFeedHotspot.nmconnection"
-            # 9. Setup Python venv and install dependencies
+            # 9. Create hotspot-startup.sh directly inline
+            printf '#!/usr/bin/env bash\nset -e\nrfkill unblock all 2>/dev/null || true\nrfkill unblock wifi 2>/dev/null || true\ncommand -v iw >/dev/null 2>&1 && iw reg set US 2>/dev/null || true\nnmcli radio wifi on 2>/dev/null || true\nsleep 2\nif ! nmcli connection up "Live Feed Hotspot" 2>/dev/null; then\n  nmcli device wifi hotspot ssid "Live Feed" password "12345678" 2>/dev/null || true\nfi\n' > /home/pi/audio_live_feed/hotspot-startup.sh
+            chmod +x /home/pi/audio_live_feed/hotspot-startup.sh /home/pi/audio_live_feed/start.sh 2>/dev/null || true
+            # 10. Create hotspot-startup.service directly inline
+            printf '[Unit]\nDescription=Ensure Wi-Fi Hotspot Broadcasts on Boot\nAfter=NetworkManager.service\nWants=NetworkManager.service\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/home/pi/audio_live_feed/hotspot-startup.sh\n\n[Install]\nWantedBy=multi-user.target\n' > /etc/systemd/system/hotspot-startup.service
+            ln -sf /etc/systemd/system/hotspot-startup.service /etc/systemd/system/multi-user.target.wants/hotspot-startup.service
+            # 11. Setup Python venv and install dependencies
             cd /home/pi/audio_live_feed
-            chmod +x hotspot-startup.sh start.sh
             python3 -m venv venv
             ./venv/bin/pip install --upgrade pip
             ./venv/bin/pip install -r requirements.txt
-            # 10. Install and enable systemd services offline
-            cp hotspot-startup.service /etc/systemd/system/hotspot-startup.service
-            ln -sf /etc/systemd/system/hotspot-startup.service /etc/systemd/system/multi-user.target.wants/hotspot-startup.service
+            # 12. Install and enable audio live feed systemd service
             cp audio-live-feed.service /etc/systemd/system/audio-live-feed.service
             ln -sf /etc/systemd/system/audio-live-feed.service /etc/systemd/system/multi-user.target.wants/audio-live-feed.service
-            # 11. Set correct file permissions
+            # 13. Set correct file permissions
             chown -R pi:pi /home/pi/audio_live_feed
       - name: Compress image with XZ
         run: |
