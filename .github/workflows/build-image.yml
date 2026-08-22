@@ -20,7 +20,7 @@ jobs:
           commands: |
             # 1. Install system packages (including wpasupplicant and wireless-regdb for Wi-Fi driver support)
             apt-get update
-            apt-get install -y python3 python3-venv python3-pip portaudio19-dev python3-dev network-manager wpasupplicant wireless-regdb crda iw avahi-daemon git sudo openssh-server rfkill iptables dnsmasq-base
+            apt-get install -y python3 python3-venv python3-pip portaudio19-dev python3-dev network-manager wpasupplicant wireless-regdb iw avahi-daemon git sudo openssh-server rfkill iptables dnsmasq-base
             # 2. Set hostname offline (without dbus)
             echo "livefeed" > /etc/hostname
             sed -i 's/127\.0\.1\.1.*/127.0.1.1\tlivefeed/g' /etc/hosts || true
