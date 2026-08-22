@@ -23,27 +23,56 @@ jobs:
           commands: |
             # 1. Install system packages
             apt-get update
-            apt-get install -y python3 python3-venv python3-pip portaudio19-dev python3-dev network-manager avahi-daemon git
+            apt-get install -y python3 python3-venv python3-pip portaudio19-dev python3-dev network-manager avahi-daemon git sudo openssh-server rfkill
 
             # 2. Set hostname offline (without dbus)
             echo "livefeed" > /etc/hostname
             sed -i 's/127\.0\.1\.1.*/127.0.1.1\tlivefeed/g' /etc/hosts || true
 
-            # 3. Ensure pi user exists
+            # 3. Create 'pi' user with default password 'raspberry' & full sudo/audio/netdev permissions
             id -u pi &>/dev/null || useradd -m -s /bin/bash pi
+            echo "pi:raspberry" | chpasswd
+            usermod -aG sudo,audio,video,netdev,plugdev,dialout,input,render pi
+            echo "pi ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/010_pi-nopasswd
+            chmod 0440 /etc/sudoers.d/010_pi-nopasswd
 
-            # 4. Setup Python venv and install dependencies
+            # 4. Enable SSH and NetworkManager on boot out of the box
+            mkdir -p /etc/systemd/system/multi-user.target.wants
+            ln -sf /lib/systemd/system/ssh.service /etc/systemd/system/multi-user.target.wants/ssh.service || true
+            ln -sf /lib/systemd/system/sshd.service /etc/systemd/system/multi-user.target.wants/sshd.service || true
+            ln -sf /lib/systemd/system/NetworkManager.service /etc/systemd/system/multi-user.target.wants/NetworkManager.service || true
+            ln -sf /lib/systemd/system/avahi-daemon.service /etc/systemd/system/multi-user.target.wants/avahi-daemon.service || true
+
+            # 5. Enable SSH and user in boot partitions for Raspberry Pi OS first-boot scripts
+            if [ -d /boot/firmware ]; then
+              touch /boot/firmware/ssh
+              echo "pi:\$6\$4bZk1wI909yP1P2g\$l6YFj9hT1vFm9c6WjXqNlJ4vJg5CgQ1nUu8s8E4mNqT9p.H.m7B1F3C4v0u1e.Y3f5g7h8i9j0k1l2m3n4/" > /boot/firmware/userconf.txt
+            fi
+            if [ -d /boot ]; then
+              touch /boot/ssh
+              echo "pi:\$6\$4bZk1wI909yP1P2g\$l6YFj9hT1vFm9c6WjXqNlJ4vJg5CgQ1nUu8s8E4mNqT9p.H.m7B1F3C4v0u1e.Y3f5g7h8i9j0k1l2m3n4/" > /boot/userconf.txt
+            fi
+
+            # 6. Unblock Wi-Fi & Set Default Wi-Fi Country (prevents RFKill soft-block)
+            mkdir -p /etc/wpa_supplicant
+            cat << 'EOF' > /etc/wpa_supplicant/wpa_supplicant.conf
+country=US
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+EOF
+            chmod 600 /etc/wpa_supplicant/wpa_supplicant.conf || true
+
+            # 7. Setup Python venv and install dependencies
             cd /home/pi/audio_live_feed
             python3 -m venv venv
             ./venv/bin/pip install --upgrade pip
             ./venv/bin/pip install -r requirements.txt
 
-            # 5. Install and enable systemd service offline
+            # 8. Install and enable systemd service offline
             cp audio-live-feed.service /etc/systemd/system/audio-live-feed.service
-            mkdir -p /etc/systemd/system/multi-user.target.wants
             ln -sf /etc/systemd/system/audio-live-feed.service /etc/systemd/system/multi-user.target.wants/audio-live-feed.service
 
-            # 6. Set correct permissions
+            # 9. Set correct permissions
             chown -R pi:pi /home/pi/audio_live_feed
 
       - name: Compress image with XZ
