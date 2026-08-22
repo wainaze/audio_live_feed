@@ -18,9 +18,9 @@ jobs:
           image_additional_mb: 1024
           copy_repository_path: /home/pi/audio_live_feed
           commands: |
-            # 1. Install system packages
+            # 1. Install system packages (including wpasupplicant and wireless-regdb for Wi-Fi driver support)
             apt-get update
-            apt-get install -y python3 python3-venv python3-pip portaudio19-dev python3-dev network-manager avahi-daemon git sudo openssh-server rfkill iptables dnsmasq-base
+            apt-get install -y python3 python3-venv python3-pip portaudio19-dev python3-dev network-manager wpasupplicant wireless-regdb crda iw avahi-daemon git sudo openssh-server rfkill iptables dnsmasq-base
             # 2. Set hostname offline (without dbus)
             echo "livefeed" > /etc/hostname
             sed -i 's/127\.0\.1\.1.*/127.0.1.1\tlivefeed/g' /etc/hosts || true
@@ -55,14 +55,17 @@ jobs:
             chmod 600 /etc/wpa_supplicant/wpa_supplicant.conf || true
             # 8. Bake native NetworkManager Hotspot connection profile (starts automatically on OS boot)
             mkdir -p /etc/NetworkManager/system-connections
-            printf "[connection]\nid=Live Feed Hotspot\nuuid=a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d\ntype=wifi\nautoconnect=true\nautoconnect-priority=100\ninterface-name=wlan0\n\n[wifi]\nmode=ap\nssid=Live Feed\nband=bg\nchannel=6\n\n[wifi-security]\nkey-mgmt=wpa-psk\npsk=12345678\n\n[ipv4]\nmethod=shared\naddress1=10.42.0.1/24\n\n[ipv6]\nmethod=ignore\n" > "/etc/NetworkManager/system-connections/LiveFeedHotspot.nmconnection"
+            printf "[connection]\nid=Live Feed Hotspot\nuuid=a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d\ntype=wifi\nautoconnect=true\nautoconnect-priority=100\n\n[wifi]\nmode=ap\nssid=Live Feed\nband=bg\nchannel=6\n\n[wifi-security]\nkey-mgmt=wpa-psk\nproto=rsn\npairwise=ccmp\ngroup=ccmp\npsk=12345678\n\n[ipv4]\nmethod=shared\naddress1=10.42.0.1/24\n\n[ipv6]\nmethod=ignore\n" > "/etc/NetworkManager/system-connections/LiveFeedHotspot.nmconnection"
             chmod 600 "/etc/NetworkManager/system-connections/LiveFeedHotspot.nmconnection"
             # 9. Setup Python venv and install dependencies
             cd /home/pi/audio_live_feed
+            chmod +x hotspot-startup.sh start.sh
             python3 -m venv venv
             ./venv/bin/pip install --upgrade pip
             ./venv/bin/pip install -r requirements.txt
-            # 10. Install and enable systemd service offline
+            # 10. Install and enable systemd services offline
+            cp hotspot-startup.service /etc/systemd/system/hotspot-startup.service
+            ln -sf /etc/systemd/system/hotspot-startup.service /etc/systemd/system/multi-user.target.wants/hotspot-startup.service
             cp audio-live-feed.service /etc/systemd/system/audio-live-feed.service
             ln -sf /etc/systemd/system/audio-live-feed.service /etc/systemd/system/multi-user.target.wants/audio-live-feed.service
             # 11. Set correct file permissions
