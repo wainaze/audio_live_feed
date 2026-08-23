@@ -392,6 +392,11 @@ def setup_hotspot():
         else:
             create_password_hotspot()
 
+        # Unblock firewall for web traffic and redirect port 80 -> 8000
+        run_cmd(sudo_cmd(["iptables", "-I", "INPUT", "-p", "tcp", "--dport", str(SERVER_PORT), "-j", "ACCEPT"]), check=False)
+        run_cmd(sudo_cmd(["iptables", "-I", "INPUT", "-p", "tcp", "--dport", "80", "-j", "ACCEPT"]), check=False)
+        run_cmd(sudo_cmd(["iptables", "-t", "nat", "-I", "PREROUTING", "-p", "tcp", "--dport", "80", "-j", "REDIRECT", "--to-port", str(SERVER_PORT)]), check=False)
+
         time.sleep(2)
         run_cmd(["nmcli", "connection", "show"], check=False)
         run_cmd(["nmcli", "device", "status"], check=False)
