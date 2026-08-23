@@ -1,0 +1,12 @@
+[Unit]
+Description=Ensure Wi-Fi Hotspot Broadcasts on Boot
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/pi/audio_live_feed/hotspot-startup.sh
+
+[Install]
+WantedBy=multi-user.target
