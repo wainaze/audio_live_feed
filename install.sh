@@ -58,6 +58,38 @@ sudo systemctl unmask NetworkManager 2>/dev/null || true
 sudo systemctl enable NetworkManager 2>/dev/null || true
 sudo systemctl start NetworkManager 2>/dev/null || true
 
+# Pre-configure persistent NetworkManager Hotspot connection profile
+sudo mkdir -p /etc/NetworkManager/system-connections
+sudo bash -c 'cat << "EOF" > /etc/NetworkManager/system-connections/LiveFeedHotspot.nmconnection
+[connection]
+id=Live Feed Hotspot
+uuid=a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
+type=wifi
+autoconnect=true
+autoconnect-priority=100
+
+[wifi]
+mode=ap
+ssid=Live Feed
+band=bg
+channel=6
+
+[wifi-security]
+key-mgmt=wpa-psk
+proto=rsn
+pairwise=ccmp
+group=ccmp
+psk=12345678
+
+[ipv4]
+method=shared
+address1=10.42.0.1/24
+
+[ipv6]
+method=ignore
+EOF'
+sudo chmod 600 /etc/NetworkManager/system-connections/LiveFeedHotspot.nmconnection 2>/dev/null || true
+
 # Ensure start.sh is executable
 chmod +x "$APP_DIR/start.sh"
 
