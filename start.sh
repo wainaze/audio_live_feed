@@ -11,4 +11,4 @@ fi
 
 source venv/bin/activate
 
-python main.py "$@"
+python main.py --no-hotspot "$@"
