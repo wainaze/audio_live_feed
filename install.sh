@@ -21,6 +21,7 @@ sudo apt install -y \
   iw \
   avahi-daemon \
   rfkill \
+  iptables \
   git
 
 # Ensure user is in audio, video, netdev groups
@@ -52,6 +53,11 @@ echo "[*] Installing Python dependencies..."
 pip install --upgrade pip
 pip install -r requirements.txt
 
+# Ensure NetworkManager is unmasked, enabled, and running
+sudo systemctl unmask NetworkManager 2>/dev/null || true
+sudo systemctl enable NetworkManager 2>/dev/null || true
+sudo systemctl start NetworkManager 2>/dev/null || true
+
 # Ensure start.sh is executable
 chmod +x "$APP_DIR/start.sh"
 
@@ -59,8 +65,8 @@ echo "[*] Generating and installing systemd service..."
 sudo bash -c "cat << EOF > /etc/systemd/system/audio-live-feed.service
 [Unit]
 Description=Live Audio Feed
-After=network-manager.service sound.target
-Wants=network-manager.service
+After=NetworkManager.service sound.target
+Wants=NetworkManager.service
 
 [Service]
 Type=simple
