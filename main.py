@@ -173,7 +173,7 @@ def run_cmd(cmd, check=True):
 def sudo_cmd(args):
     if os.geteuid() == 0:
         return args
-    return ["sudo"] + args
+    return ["sudo", "-n"] + args
 
 
 def get_hotspot_ip():
@@ -1910,6 +1910,17 @@ async def on_shutdown():
 # MAIN
 # =========================================================
 
+def set_status_led(trigger="heartbeat"):
+    """Control the onboard Raspberry Pi Green ACT LED to show live appliance status."""
+    for path in ["/sys/class/leds/ACT/trigger", "/sys/class/leds/led0/trigger"]:
+        if os.path.exists(path):
+            try:
+                with open(path, "w") as f:
+                    f.write(trigger)
+            except Exception:
+                pass
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default=SERVER_HOST)
@@ -1922,8 +1933,10 @@ def main():
     else:
         ok = setup_hotspot()
         if not ok:
-            print("[!] Hotspot setup failed. Exiting.")
-            sys.exit(1)
+            print("[!] Hotspot setup encountered an error. Continuing with web server startup...")
+
+    # Set onboard green LED to pulse like a heartbeat (visual confirmation it's live)
+    set_status_led("heartbeat")
 
     hotspot_ip = get_hotspot_ip()
 
@@ -1938,7 +1951,10 @@ def main():
     print("=" * 60)
     print()
 
-    uvicorn.run(app, host=args.host, port=args.port)
+    try:
+        uvicorn.run(app, host=args.host, port=args.port)
+    finally:
+        set_status_led("none")
 
 
 if __name__ == "__main__":
