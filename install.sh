@@ -30,6 +30,8 @@ source venv/bin/activate
 echo "[*] Installing Python dependencies..."
 pip install --upgrade pip
 pip install -r requirements.txt
+# Ensure start.sh is executable
+chmod +x "$APP_DIR/start.sh"
 echo "[*] Generating and installing systemd service..."
 sudo bash -c "cat << EOF > /etc/systemd/system/audio-live-feed.service
 [Unit]
@@ -40,7 +42,7 @@ Wants=network-manager.service
 Type=simple
 User=${CURRENT_USER}
 WorkingDirectory=${APP_DIR}
-ExecStart=${APP_DIR}/start.sh
+ExecStart=/bin/bash ${APP_DIR}/start.sh
 Restart=always
 RestartSec=5
 [Install]
