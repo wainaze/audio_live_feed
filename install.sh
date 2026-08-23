@@ -97,16 +97,20 @@ echo "[*] Generating and installing systemd service..."
 sudo bash -c "cat << EOF > /etc/systemd/system/audio-live-feed.service
 [Unit]
 Description=Live Audio Feed
-After=NetworkManager.service sound.target
-Wants=NetworkManager.service
+After=network.target sound.target NetworkManager.service
+Wants=network.target
 
 [Service]
 Type=simple
 User=${CURRENT_USER}
 WorkingDirectory=${APP_DIR}
-ExecStart=/bin/bash ${APP_DIR}/start.sh
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=-/usr/sbin/iptables -I INPUT -p tcp --dport 8000 -j ACCEPT
+ExecStartPre=-/usr/sbin/iptables -I INPUT -p tcp --dport 80 -j ACCEPT
+ExecStartPre=-/usr/sbin/iptables -t nat -I PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8000
+ExecStart=${APP_DIR}/venv/bin/python ${APP_DIR}/main.py --no-hotspot
 Restart=always
-RestartSec=5
+RestartSec=3
 
 [Install]
 WantedBy=multi-user.target
