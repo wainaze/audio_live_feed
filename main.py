@@ -252,16 +252,16 @@ def scan_wifi_networks():
     networks = {}
     try:
         res = subprocess.run(
-            ["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY,IN-USE", "dev", "wifi", "list"],
+            ["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY,IN-USE", "dev", "wifi", "list", "--rescan", "auto"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=12,
         )
         for line in res.stdout.splitlines():
-            parts = line.split(":")
-            if len(parts) >= 4:
-                ssid = parts[0].strip()
-                if not ssid or ssid == "--":
+            parts = line.rsplit(":", 3)
+            if len(parts) == 4:
+                ssid = parts[0].replace("\\:", ":").strip()
+                if not ssid or ssid == "--" or ssid == HOTSPOT_NAME:
                     continue
                 signal = int(parts[1]) if parts[1].isdigit() else 0
                 security = parts[2].strip() or "Open"
@@ -283,41 +283,107 @@ def scan_wifi_networks():
 def connect_to_wifi(ssid: str, password: str = ""):
     ifname = WIFI_INTERFACE
 
-    # 1. Try immediate live connection if network is broadcasting
-    cmd = ["nmcli", "dev", "wifi", "connect", ssid]
-    if password:
-        cmd.extend(["password", password])
-    if ifname:
-        cmd.extend(["ifname", ifname])
+    # 1. Remove any stale connection profile for this SSID
+    subprocess.run(
+        sudo_cmd(["nmcli", "connection", "delete", ssid]),
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
 
-    res = subprocess.run(sudo_cmd(cmd), capture_output=True, text=True, timeout=12)
-    if res.returncode == 0:
-        return {"success": True, "message": f"Connected to {ssid}"}
+    # 2. Ensure Hotspot profile has lower autoconnect-priority (10) than client Wi-Fi (200)
+    for hs_con in ("Live Feed Hotspot", HOTSPOT_NAME):
+        subprocess.run(
+            sudo_cmd(["nmcli", "connection", "modify", hs_con, "connection.autoconnect-priority", "10"]),
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
 
-    # 2. If network is currently off (e.g. phone hotspot), save profile offline with autoconnect
-    subprocess.run(sudo_cmd(["nmcli", "connection", "delete", ssid]), capture_output=True, text=True)
-
+    # 3. Create explicit NetworkManager Wi-Fi profile (avoids nmcli dev wifi connect Bookworm 'Secrets required' bug)
     add_cmd = [
         "nmcli", "connection", "add",
         "type", "wifi",
         "con-name", ssid,
         "ifname", ifname,
         "ssid", ssid,
-        "autoconnect", "yes",
+        "connection.autoconnect", "yes",
+        "connection.autoconnect-priority", "200",
     ]
     if password:
-        add_cmd.extend(["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", password])
-    else:
-        add_cmd.extend(["wifi-sec.key-mgmt", "none"])
+        add_cmd.extend([
+            "802-11-wireless-security.key-mgmt", "wpa-psk",
+            "802-11-wireless-security.psk", password,
+        ])
 
-    add_res = subprocess.run(sudo_cmd(add_cmd), capture_output=True, text=True, timeout=10)
-    if add_res.returncode == 0:
+    try:
+        add_res = subprocess.run(sudo_cmd(add_cmd), capture_output=True, text=True, timeout=10)
+    except Exception as e:
+        return {"success": False, "error": f"Failed to create Wi-Fi profile: {e}"}
+
+    if add_res.returncode != 0:
+        err = add_res.stderr.strip() or add_res.stdout.strip()
+        return {"success": False, "error": err or "Failed to save Wi-Fi profile"}
+
+    # 4. Bring down active Hotspot on wlan0 so the radio can switch from AP mode to Client mode
+    for hs_con in ("Live Feed Hotspot", HOTSPOT_NAME):
+        subprocess.run(
+            sudo_cmd(["nmcli", "connection", "down", hs_con]),
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+
+    # 5. Trigger a quick rescan in Client mode and activate the new Wi-Fi profile
+    subprocess.run(
+        sudo_cmd(["nmcli", "dev", "wifi", "rescan", "ifname", ifname]),
+        capture_output=True,
+        text=True,
+        timeout=8,
+    )
+    time.sleep(2)
+
+    try:
+        up_res = subprocess.run(
+            sudo_cmd(["nmcli", "-w", "20", "connection", "up", ssid]),
+            capture_output=True,
+            text=True,
+            timeout=25,
+        )
+        if up_res.returncode == 0:
+            new_ip = get_hotspot_ip()
+            return {
+                "success": True,
+                "message": f"Connected to '{ssid}'! Server IP is now {new_ip} (http://livefeed.local:8000)",
+            }
+        err_msg = up_res.stderr.strip() or up_res.stdout.strip()
+    except subprocess.TimeoutExpired:
+        err_msg = "Connection timed out while waiting for router DHCP/authentication."
+    except Exception as e:
+        err_msg = str(e)
+
+    # 6. If live connection failed (e.g. phone hotspot is currently off or wrong password),
+    # restore the Live Feed Hotspot immediately so the user is never locked out!
+    for hs_con in ("Live Feed Hotspot", HOTSPOT_NAME):
+        res_hs = subprocess.run(
+            sudo_cmd(["nmcli", "connection", "up", hs_con]),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if res_hs.returncode == 0:
+            break
+
+    if "No network with SSID" in err_msg:
         return {
             "success": True,
-            "message": f"Saved Wi-Fi profile for '{ssid}'. When you turn on your Personal Hotspot, the server will connect automatically!",
+            "message": (
+                f"Saved Wi-Fi profile for '{ssid}' (priority 200). "
+                f"Network is not currently broadcasting — turn on '{ssid}' and reboot or reconnect."
+            ),
         }
 
-    return {"success": False, "error": res.stderr.strip() or res.stdout.strip()}
+    return {"success": False, "error": f"Could not connect to '{ssid}': {err_msg}"}
 
 
 def validate_hotspot_config():
@@ -1553,13 +1619,28 @@ ADMIN_HTML = """
                 nets.forEach(n => {
                     const row = document.createElement("div");
                     row.className = "wifi-item";
-                    row.innerHTML = `
-                        <div class="wifi-ssid">
-                            <span>${n.in_use ? '● ' : ''}${n.ssid}</span>
-                            <small style="color:#64748b; font-weight:normal">(${n.signal}%)</small>
-                        </div>
-                        <button class="btn btn-primary" style="padding:4px 10px; font-size:12px;" onclick="openWifiModal('${n.ssid}')">Connect</button>
-                    `;
+
+                    const infoDiv = document.createElement("div");
+                    infoDiv.className = "wifi-ssid";
+
+                    const nameSpan = document.createElement("span");
+                    nameSpan.textContent = (n.in_use ? "● " : "") + n.ssid;
+
+                    const sigSmall = document.createElement("small");
+                    sigSmall.style.cssText = "color:#64748b; font-weight:normal; margin-left:6px;";
+                    sigSmall.textContent = `(${n.signal}%)`;
+
+                    infoDiv.appendChild(nameSpan);
+                    infoDiv.appendChild(sigSmall);
+
+                    const btn = document.createElement("button");
+                    btn.className = "btn btn-primary";
+                    btn.style.cssText = "padding:4px 10px; font-size:12px;";
+                    btn.textContent = "Connect";
+                    btn.addEventListener("click", () => openWifiModal(n.ssid));
+
+                    row.appendChild(infoDiv);
+                    row.appendChild(btn);
                     list.appendChild(row);
                 });
             } catch(e) {
@@ -1595,15 +1676,21 @@ ADMIN_HTML = """
                 return;
             }
             closeWifiModal();
-            alert("Attempting to connect to " + ssid + ". If this is a phone hotspot, please make sure your hotspot is ON.");
-            const res = await fetch("/api/wifi/connect", {
-                method: "POST",
-                headers: {"Content-Type": "application/json"},
-                body: JSON.stringify({ssid: ssid, password: pass})
-            });
-            const data = await res.json();
-            alert(data.success ? data.message : "Connection attempt returned: " + (data.error || "failed"));
-            loadWifiStatus();
+            try {
+                const res = await fetch("/api/wifi/connect", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({ssid: ssid, password: pass})
+                });
+                const data = await res.json();
+                alert(data.success ? data.message : "Connection failed: " + (data.error || "unknown error"));
+                loadWifiStatus();
+            } catch (err) {
+                alert(
+                    "The server switched its Wi-Fi antenna from 'Live Feed' to '" + ssid + "'.\\n\\n" +
+                    "Connect your device to '" + ssid + "' and open:\\nhttp://livefeed.local:8000"
+                );
+            }
         }
 
         async function loadAudioStatus() {
