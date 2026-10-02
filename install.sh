@@ -66,7 +66,7 @@ id=Live Feed Hotspot
 uuid=a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 type=wifi
 autoconnect=true
-autoconnect-priority=100
+autoconnect-priority=10
 
 [wifi]
 mode=ap
